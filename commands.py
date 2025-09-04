@@ -288,61 +288,20 @@ class CommandHandler:
         content = self._clean_text_content(content)
         content_lower = content.lower()
         
-        # Enhanced credential patterns - check for various username/password combinations
-        # These patterns are designed to handle OCR text which may have spacing issues
-        credential_patterns = [
-            # Pattern 1: "username: user password: pass" or "user: user pass: pass" (flexible spacing)
-            r'(?:username|user|id|email|login)\s*:\s*([^\s:]+)\s+(?:password|pass|pwd)\s*:\s*([^\s]+)',
-            # Pattern 2: "label - username: user password: pass" (flexible spacing and separators)
-            r'([^:\n]+?)\s*[-–—]\s*(?:username|user|id|email|login)\s*:\s*([^\s:]+)\s+(?:password|pass|pwd)\s*:\s*([^\s]+)',
-            # Pattern 3: "label: username user password pass" (colon format with flexible spacing)
-            r'([^:\n]+?)\s*:\s*(?:username|user|id|email|login)\s+([^\s]+)\s+(?:password|pass|pwd)\s+([^\s]+)',
-            # Pattern 4: "label user pass" (simple format, three words)
-            r'([a-zA-Z][a-zA-Z0-9\s]{2,15})\s+([^\s]{3,})\s+([^\s]{3,})',
-            # Pattern 5: "username user password pass" (no colon, flexible spacing)
-            r'(?:username|user|id|email|login)\s+([^\s]{3,})\s+(?:password|pass|pwd)\s+([^\s]{3,})',
-            # Pattern 6: "label - user:pass" or "label user:pass" format
-            r'([^:\n]+?)\s*[-–—]?\s*([^\s:]+)\s*:\s*([^\s]+)',
-            # Pattern 7: Line-based credentials (each on separate line)
-            r'([a-zA-Z][a-zA-Z0-9\s]+)\n\s*([^\s\n]+)\n\s*([^\s\n]+)',
-            # Pattern 8: Account/Service credentials with various formats
-            r'(?:account|service|site|app|login)\s*[-–—:]?\s*([^:\n]+?)\s*[-–—:]\s*([^\s]+)\s*[-–—:]\s*([^\s]+)',
-        ]
-        
-        for pattern in credential_patterns:
+        # Smart password and credential detection patterns
+        # Detect any potential password-like content automatically
+        potential_credentials = self._detect_credentials_intelligently(content)
+        for cred in potential_credentials:
             try:
-                match = re.search(pattern, content, re.IGNORECASE)
-                if match:
-                    groups = match.groups()
-                    if len(groups) == 2:
-                        # Pattern 5: username/password without label
-                        username, password = groups
-                        if username and password and len(username) < 200 and len(password) < 500:
-                            label = f"Account_{username}"
-                            await self.storage.store_credential(user_id, label, username, password)
-                            logger.info(f"Stored credentials for user {user_id}: {label}")
-                            return
-                    elif len(groups) == 3:
-                        # Patterns 2, 3, 4, 6: label, username, password
-                        label, username, password = groups
-                        if (label and username and password and 
-                            len(label) < 200 and len(username) < 200 and len(password) < 500):
-                            await self.storage.store_credential(user_id, label.strip(), username.strip(), password.strip())
-                            logger.info(f"Stored credentials for user {user_id}: {label}")
-                            return
+                if cred['type'] == 'credential':
+                    await self.storage.store_credential(user_id, cred['label'], cred['username'], cred['password'])
+                    logger.info(f"Auto-detected and stored credentials for user {user_id}: {cred['label']}")
+                elif cred['type'] == 'password':
+                    await self.storage.store_password(user_id, cred['label'], cred['password'])
+                    logger.info(f"Auto-detected and stored password for user {user_id}: {cred['label']}")
             except Exception as e:
-                logger.error(f"Error processing credential pattern: {e}")
+                logger.error(f"Error storing auto-detected credential: {e}")
                 continue
-        
-        # Legacy password pattern: "password: <label> <password>"
-        password_match = re.match(r'password:\s*([^:]+?)\s+(.+)', content, re.IGNORECASE)
-        if password_match:
-            label = password_match.group(1).strip()
-            password = password_match.group(2).strip()
-            if label and password:
-                await self.storage.store_password(user_id, label, password)
-                logger.info(f"Stored password for user {user_id} with label '{label}'")
-            return
         
         # Check for email addresses with enhanced patterns for OCR text
         email_patterns = [
@@ -422,6 +381,174 @@ class CommandHandler:
                 await self.storage.store_note(user_id, content.strip())
                 logger.info(f"Stored note for user {user_id}")
     
+    def _detect_credentials_intelligently(self, content: str) -> list:
+        """
+        Intelligently detect passwords and credentials from any text format.
+        Uses multiple heuristics to identify password-like content.
+        """
+        credentials = []
+        words = content.split()
+        lines = content.split('\n')
+        
+        # Heuristic 1: Look for password-like strings (8+ chars with mixed case/numbers/symbols)
+        potential_passwords = []
+        for word in words:
+            if self._looks_like_password(word):
+                potential_passwords.append(word)
+        
+        # Heuristic 2: Context-based detection - look for words near password indicators
+        password_indicators = ['password', 'pass', 'pwd', 'key', 'secret', 'token', 'auth', 'login']
+        username_indicators = ['username', 'user', 'email', 'login', 'id', 'account']
+        
+        for i, word in enumerate(words):
+            word_lower = word.lower()
+            
+            # Check if current word is a password indicator
+            if any(indicator in word_lower for indicator in password_indicators):
+                # Look for password in next few words
+                for j in range(i+1, min(i+5, len(words))):
+                    next_word = words[j]
+                    if self._looks_like_password(next_word) or len(next_word) >= 6:
+                        # Try to find a label (look backwards)
+                        label = self._find_label_before(words, i)
+                        credentials.append({
+                            'type': 'password',
+                            'label': label or 'Detected',
+                            'password': next_word
+                        })
+                        break
+            
+            # Check for username/password pairs
+            elif any(indicator in word_lower for indicator in username_indicators):
+                # Look for username and password in next few words
+                username = None
+                password = None
+                
+                for j in range(i+1, min(i+6, len(words))):
+                    if not username and self._looks_like_username(words[j]):
+                        username = words[j]
+                    elif username and self._looks_like_password(words[j]):
+                        password = words[j]
+                        break
+                
+                if username and password:
+                    label = self._find_label_before(words, i) or username
+                    credentials.append({
+                        'type': 'credential',
+                        'label': label,
+                        'username': username,
+                        'password': password
+                    })
+        
+        # Heuristic 3: Line-based detection for structured data
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Look for "key: value" patterns
+            if ':' in line:
+                parts = line.split(':', 1)
+                if len(parts) == 2:
+                    key = parts[0].strip().lower()
+                    value = parts[1].strip()
+                    
+                    # Check if key suggests this is a password
+                    if any(indicator in key for indicator in password_indicators) and value:
+                        label = key.replace('password', '').replace('pass', '').replace('pwd', '').strip()
+                        if not label:
+                            label = 'Detected'
+                        credentials.append({
+                            'type': 'password',
+                            'label': label.title(),
+                            'password': value
+                        })
+        
+        # Heuristic 4: Pattern-free detection - just look for password-like strings with context
+        for i, word in enumerate(words):
+            if self._looks_like_password(word):
+                # Check if there's context around it
+                context_words = []
+                for j in range(max(0, i-3), min(len(words), i+4)):
+                    if j != i:
+                        context_words.append(words[j].lower())
+                
+                # If there's password-related context, store it
+                if any(indicator in ' '.join(context_words) for indicator in password_indicators + username_indicators):
+                    label = self._find_label_before(words, i) or 'Detected'
+                    credentials.append({
+                        'type': 'password',
+                        'label': label,
+                        'password': word
+                    })
+        
+        # Remove duplicates based on password value
+        seen_passwords = set()
+        unique_credentials = []
+        for cred in credentials:
+            password = cred.get('password', '')
+            if password not in seen_passwords:
+                seen_passwords.add(password)
+                unique_credentials.append(cred)
+        
+        return unique_credentials
+    
+    def _looks_like_password(self, word: str) -> bool:
+        """Check if a word looks like a password."""
+        if len(word) < 6:
+            return False
+        
+        # Basic password characteristics
+        has_upper = any(c.isupper() for c in word)
+        has_lower = any(c.islower() for c in word)
+        has_digit = any(c.isdigit() for c in word)
+        has_special = any(c in '!@#$%^&*()_+-=[]{}|;:,.<>?' for c in word)
+        
+        # Strong password indicators
+        if len(word) >= 8 and sum([has_upper, has_lower, has_digit, has_special]) >= 3:
+            return True
+        
+        # Medium password indicators
+        if len(word) >= 10 and sum([has_upper, has_lower, has_digit]) >= 2:
+            return True
+        
+        # Look for common password patterns
+        common_patterns = ['123', 'abc', 'qwerty', 'password', 'admin']
+        if any(pattern in word.lower() for pattern in common_patterns):
+            return len(word) >= 6
+        
+        return False
+    
+    def _looks_like_username(self, word: str) -> bool:
+        """Check if a word looks like a username."""
+        if len(word) < 3 or len(word) > 50:
+            return False
+        
+        # Email-like usernames
+        if '@' in word:
+            return True
+        
+        # Alphanumeric with some special chars
+        if re.match(r'^[a-zA-Z0-9._-]+$', word):
+            return True
+        
+        return False
+    
+    def _find_label_before(self, words: list, index: int) -> str:
+        """Find a suitable label before the given index."""
+        # Look backwards for a potential label
+        for i in range(index-1, max(0, index-4), -1):
+            word = words[i]
+            # Skip common words
+            if word.lower() in ['for', 'the', 'my', 'is', 'to', 'and', 'or', ':', '-', '–', '—']:
+                continue
+            # Clean up the word and use it as label
+            label = word.strip(':-–—').strip()
+            if len(label) > 1 and len(label) < 50:
+                return label.title()
+        
+        return None
+
     def _clean_text_content(self, content: str) -> str:
         """Clean and normalize text content, especially useful for OCR text."""
         if not content:
