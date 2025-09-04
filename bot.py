@@ -208,6 +208,9 @@ class PersonalDataBot(commands.Bot):
         """Process entire conversation history and categorize content."""
         logger.info(f"Processing {len(messages)} messages for user {user_id}")
         
+        # Track what we've already processed to avoid duplicates
+        processed_content = set()
+        
         for msg in messages:
             if msg['type'] not in ['text', 'image_ocr']:
                 continue
@@ -219,6 +222,12 @@ class PersonalDataBot(commands.Bot):
                 continue  # Skip error messages
             elif content.startswith('!'):
                 continue  # Skip commands
+            
+            # Skip if we've already processed this exact content
+            content_hash = hash(content.strip())
+            if content_hash in processed_content:
+                continue
+            processed_content.add(content_hash)
             
             # Auto-categorize the content
             await self.command_handler._auto_categorize_and_store(user_id, content)

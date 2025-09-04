@@ -266,12 +266,20 @@ class UserStorage:
             user_id = self._validate_user_id(user_id)
             note = self._validate_content(note)
             
+            # Check for duplicates first (only for exact same notes)
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(
-                    "INSERT INTO user_notes (user_id, note) VALUES (?, ?)",
+                cursor = await db.execute(
+                    "SELECT id FROM user_notes WHERE user_id = ? AND note = ? AND timestamp > datetime('now', '-1 hour')",
                     (user_id, note)
                 )
-                await db.commit()
+                existing = await cursor.fetchone()
+                
+                if not existing:
+                    await db.execute(
+                        "INSERT INTO user_notes (user_id, note) VALUES (?, ?)",
+                        (user_id, note)
+                    )
+                    await db.commit()
         except ValueError as e:
             logger.warning(f"Validation error storing note for user {user_id}: {e}")
         except Exception as e:
@@ -298,12 +306,20 @@ class UserStorage:
             email = self._validate_email(email)
             label = self._validate_label(label) if label is not None else None
             
+            # Check for duplicates first
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(
-                    "INSERT INTO user_emails (user_id, email, label) VALUES (?, ?, ?)",
-                    (user_id, email, label)
+                cursor = await db.execute(
+                    "SELECT id FROM user_emails WHERE user_id = ? AND email = ?",
+                    (user_id, email)
                 )
-                await db.commit()
+                existing = await cursor.fetchone()
+                
+                if not existing:
+                    await db.execute(
+                        "INSERT INTO user_emails (user_id, email, label) VALUES (?, ?, ?)",
+                        (user_id, email, label)
+                    )
+                    await db.commit()
         except ValueError as e:
             logger.warning(f"Validation error storing email for user {user_id}: {e}")
         except Exception as e:
@@ -330,12 +346,20 @@ class UserStorage:
             url = self._validate_url(url)
             link_type = self._validate_content(link_type, 50) if link_type is not None else None
             
+            # Check for duplicates first
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(
-                    "INSERT INTO user_links (user_id, url, link_type) VALUES (?, ?, ?)",
-                    (user_id, url, link_type)
+                cursor = await db.execute(
+                    "SELECT id FROM user_links WHERE user_id = ? AND url = ?",
+                    (user_id, url)
                 )
-                await db.commit()
+                existing = await cursor.fetchone()
+                
+                if not existing:
+                    await db.execute(
+                        "INSERT INTO user_links (user_id, url, link_type) VALUES (?, ?, ?)",
+                        (user_id, url, link_type)
+                    )
+                    await db.commit()
         except ValueError as e:
             logger.warning(f"Validation error storing link for user {user_id}: {e}")
         except Exception as e:

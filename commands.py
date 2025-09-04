@@ -61,6 +61,10 @@ class CommandHandler:
                 return await self._handle_get_links(user_id)
             elif command.startswith('!store') or command.startswith('!save'):
                 return await self._handle_quick_store(user_id, command)
+            elif command.startswith('!s '):  # Super quick store
+                return await self._handle_super_quick_store(user_id, command)
+            elif command.startswith('!p '):  # Quick password only
+                return await self._handle_quick_password_only(user_id, command)
             elif command.startswith('!add'):
                 return await self._handle_add(user_id, command)
             elif command.startswith('!list'):
@@ -70,7 +74,7 @@ class CommandHandler:
             elif command.startswith('!clear'):
                 return await self._handle_clear(user_id)
             elif command.startswith('!help'):
-                return await self._handle_help()
+                return await self._handle_help(user_id)
             elif command.startswith('!recent'):
                 return await self._handle_recent(user_id, command)
             elif command.startswith('!search'):
@@ -215,14 +219,20 @@ class CommandHandler:
             logger.error(f"Error clearing duplicates for user {user_id}: {e}")
             return "❌ Error clearing duplicates. Please try again."
     
-    async def _handle_help(self) -> str:
+    async def _handle_help(self, user_id: str) -> str:
         """Handle !help command."""
         return """**🤖 Personal Data Bot - Help**
 
-**📥 QUICK STORAGE COMMANDS:**
+**⚡ SUPER QUICK (Most Convenient):**
+`!s <service> <username> <password>` - Lightning fast credential storage
+`!p <service> <password>` - Quick password-only storage
+Just type: `Gmail nepal@email.com mypass123` - Auto-detects everything!
+Natural: `Netflix user: john pass: abc123` - Understands human format
+
+**📥 STORAGE COMMANDS:**
 `!store <service> <username> <password>` - Store credentials
 `!store <service> <password>` - Store password only
-`!save <service> <username> <password>` - Same as !store
+`!save <anything>` - Auto-categorize and store any data
 `!add <anything>` - Smart auto-detection and storage
 
 **📤 RETRIEVAL COMMANDS:**
@@ -238,15 +248,16 @@ class CommandHandler:
 `!recent [number]` - Show recent messages (default: 5)
 `!list` - List all your stored data categories
 `!clear` - Clear all your data
-`!wake` or `!hey` - Get conversation summary
+`!clear duplicates` - Remove duplicate entries
+`!wake` - Get conversation summary
 
 **🎯 CONVENIENT INPUT FORMATS:**
+• **Super Quick**: `!s Gmail john@email.com mypass123`
+• **Password Only**: `!p Netflix secretpass456`
+• **Natural**: `Gmail user: john@email.com pass: mypass123`
 • **Simple**: `gmail john@email.com mypass123`
 • **With slash**: `Netflix: user123/pass456`
-• **With keywords**: `user john password abc123 for Gmail`
 • **Line format**: `Gmail\nuser: john\npass: abc123`
-• **Quick password**: `password gmail: mypass123`
-• **Two words**: `netflix mypassword123`
 
 **🔄 AUTO-DETECTION:**
 - **Emails**: Any email address will be saved
@@ -395,6 +406,44 @@ class CommandHandler:
         await self._auto_categorize_and_store(user_id, content)
         return "✅ Data processed and stored!"
     
+    async def _handle_super_quick_store(self, user_id: str, command: str) -> str:
+        """Handle !s command for super quick credential storage."""
+        content = command[2:].strip()  # Remove "!s"
+        parts = content.split()
+        
+        if len(parts) < 2:
+            return "**Super Quick Store Usage:**\n`!s <service> <username> <password>` or `!s <service> <password>`\n\n**Examples:**\n• `!s Gmail john@email.com mypass123`\n• `!s Netflix secretpass456`"
+        
+        service = parts[0]
+        
+        if len(parts) == 2:
+            # Just service and password
+            password = parts[1]
+            await self.storage.store_password(user_id, service, password)
+            return f"✅ Stored password for {service}!"
+        elif len(parts) >= 3:
+            # Service, username, password
+            username = parts[1]
+            password = ' '.join(parts[2:])  # In case password has spaces
+            await self.storage.store_credential(user_id, service, username, password)
+            return f"✅ Stored credentials for {service}!"
+        
+        return "Invalid format. Use: `!s <service> <username> <password>` or `!s <service> <password>`"
+    
+    async def _handle_quick_password_only(self, user_id: str, command: str) -> str:
+        """Handle !p command for password-only storage."""
+        content = command[2:].strip()  # Remove "!p"
+        parts = content.split()
+        
+        if len(parts) < 2:
+            return "**Quick Password Usage:**\n`!p <service> <password>`\n\n**Examples:**\n• `!p Netflix secretpass456`\n• `!p GitHub mytoken123`"
+        
+        service = parts[0]
+        password = ' '.join(parts[1:])  # In case password has spaces
+        
+        await self.storage.store_password(user_id, service, password)
+        return f"✅ Stored password for {service}!"
+    
     async def _auto_categorize_and_store(self, user_id: str, content: str):
         """Automatically categorize and store different types of content."""
         if not content or not content.strip():
@@ -424,7 +473,7 @@ class CommandHandler:
                 logger.error(f"Error storing auto-detected credential: {e}")
                 continue
         
-        # Enhanced convenient detection patterns (only if no credentials were found above)
+        # Enhanced convenient detection patterns (only if no strong credentials were found above)
         if not potential_credentials:
             convenient_credentials = self._detect_convenient_formats(content)
             for cred in convenient_credentials:
@@ -438,6 +487,20 @@ class CommandHandler:
                 except Exception as e:
                     logger.error(f"Error storing convenient format credential: {e}")
                     continue
+        
+        # Add ultra-convenient single line detection
+        ultra_convenient = self._detect_ultra_convenient_formats(content)
+        for cred in ultra_convenient:
+            try:
+                if cred['type'] == 'credential':
+                    await self.storage.store_credential(user_id, cred['label'], cred['username'], cred['password'])
+                    logger.info(f"Stored ultra-convenient credentials for user {user_id}: {cred['label']}")
+                elif cred['type'] == 'password':
+                    await self.storage.store_password(user_id, cred['label'], cred['password'])
+                    logger.info(f"Stored ultra-convenient password for user {user_id}: {cred['label']}")
+            except Exception as e:
+                logger.error(f"Error storing ultra-convenient credential: {e}")
+                continue
         
         # Check for email addresses with enhanced patterns for OCR text
         email_patterns = [
@@ -648,6 +711,44 @@ class CommandHandler:
                 unique_credentials.append(cred)
         
         return unique_credentials
+    
+    async def _handle_super_quick_store(self, user_id: str, command: str) -> str:
+        """Handle !s command for super quick credential storage."""
+        content = command[2:].strip()  # Remove "!s"
+        parts = content.split()
+        
+        if len(parts) < 2:
+            return "**Super Quick Store Usage:**\n`!s <service> <username> <password>` or `!s <service> <password>`\n\n**Examples:**\n• `!s Gmail john@email.com mypass123`\n• `!s Netflix secretpass456`"
+        
+        service = parts[0]
+        
+        if len(parts) == 2:
+            # Just service and password
+            password = parts[1]
+            await self.storage.store_password(user_id, service, password)
+            return f"✅ Stored password for {service}!"
+        elif len(parts) >= 3:
+            # Service, username, password
+            username = parts[1]
+            password = ' '.join(parts[2:])  # In case password has spaces
+            await self.storage.store_credential(user_id, service, username, password)
+            return f"✅ Stored credentials for {service}!"
+        
+        return "Invalid format. Use: `!s <service> <username> <password>` or `!s <service> <password>`"
+    
+    async def _handle_quick_password_only(self, user_id: str, command: str) -> str:
+        """Handle !p command for password-only storage."""
+        content = command[2:].strip()  # Remove "!p"
+        parts = content.split()
+        
+        if len(parts) < 2:
+            return "**Quick Password Usage:**\n`!p <service> <password>`\n\n**Examples:**\n• `!p Netflix secretpass456`\n• `!p GitHub mytoken123`"
+        
+        service = parts[0]
+        password = ' '.join(parts[1:])  # In case password has spaces
+        
+        await self.storage.store_password(user_id, service, password)
+        return f"✅ Stored password for {service}!"
     
     def _looks_like_password(self, word: str) -> bool:
         """Check if a word looks like a password."""
@@ -871,6 +972,40 @@ class CommandHandler:
             cleaned_words.append(word)
         
         return ' '.join(cleaned_words)
+    
+    def _detect_ultra_convenient_formats(self, content: str) -> list:
+        """Detect ultra-convenient formats like 'Gmail user@email.com password123'."""
+        credentials = []
+        words = content.split()
+        
+        # Pattern: Service + Email/Username + Password (3 words)
+        if len(words) == 3:
+            service, username, password = words
+            
+            # Check if second word is email-like or username-like
+            if ('@' in username or self._looks_like_username(username)):
+                # Check if third word is password-like
+                if self._looks_like_password(password) and len(password) >= 8:
+                    credentials.append({
+                        'type': 'credential',
+                        'label': service.title(),
+                        'username': username,
+                        'password': password
+                    })
+        
+        # Pattern: Service + Long password (2 words)
+        elif len(words) == 2:
+            service, password = words
+            
+            # Check if second word is a strong password
+            if self._looks_like_password(password) and len(password) >= 10:
+                credentials.append({
+                    'type': 'password',
+                    'label': service.title(),
+                    'password': password
+                })
+        
+        return credentials
     
     def is_valid_url(self, url: str) -> bool:
         """Check if a string is a valid URL."""
