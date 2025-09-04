@@ -116,7 +116,14 @@ set TESSERACT_PATH=C:\Program Files\Tesseract-OCR\tesseract.exe
 
 5. **Run the bot:**
 ```bash
+# Production mode (recommended)
+python start_bot.py
+
+# Or direct mode
 python bot.py
+
+# Or with validation only
+python validate_setup.py
 ```
 
 ### Replit Setup
@@ -137,18 +144,26 @@ python bot.py
 - ✅ On-demand processing with `!wake` command
 - ✅ Conversation history analysis
 - ✅ Persistent SQLite database
+- ✅ Health monitoring endpoints
+- ✅ Performance metrics tracking
 
 ## File Structure
 
 ```
 discord-personal-bot/
 ├── bot.py              # Main bot entry point
-├── storage.py          # Database operations
+├── storage.py          # Database operations with validation
 ├── ocr.py             # Image OCR processing
 ├── commands.py        # Command handling
 ├── config.py          # Configuration settings
+├── monitoring.py      # Performance monitoring
+├── keep_alive.py      # Replit keep-alive server
+├── validate_setup.py  # Setup validation script
+├── start_bot.py       # Production startup script
+├── run_bot.py         # Simple startup script
 ├── requirements.txt   # Python dependencies
 ├── README.md         # This file
+├── logs/             # Log files (created automatically)
 └── user_data.db      # SQLite database (created automatically)
 ```
 
@@ -208,6 +223,32 @@ Bot: Your Stored Data:
 - Bot only responds to DMs, not server messages
 - No data is shared between users
 - Consider enabling encryption for sensitive data (see config.py)
+
+## Monitoring & Health Checks
+
+The bot includes comprehensive monitoring and health check capabilities:
+
+### Health Endpoints (Replit)
+- `http://your-repl-url.repl.co/` - Bot status page
+- `http://your-repl-url.repl.co/health` - Basic health check
+- `http://your-repl-url.repl.co/health/detailed` - Detailed health information
+- `http://your-repl-url.repl.co/metrics` - Performance metrics
+- `http://your-repl-url.repl.co/status` - Bot status JSON
+- `http://your-repl-url.repl.co/ping` - Simple ping endpoint
+
+### Performance Monitoring
+- Message processing rate
+- Command execution rate
+- Error tracking and categorization
+- OCR operation performance
+- Database operation metrics
+- Uptime tracking
+
+### Logging
+- Comprehensive logging to `logs/bot.log`
+- Console output for real-time monitoring
+- Error categorization and tracking
+- Performance metrics logging
 
 ## Troubleshooting
 

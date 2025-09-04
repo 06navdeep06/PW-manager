@@ -4,6 +4,7 @@ Handles persistent storage of user data using SQLite database.
 """
 
 import logging
+import re
 from typing import List, Dict, Optional, Any
 import aiosqlite
 
@@ -14,6 +15,62 @@ class UserStorage:
     
     def __init__(self, db_path: str = "user_data.db"):
         self.db_path = db_path
+        # Maximum lengths for validation
+        self.MAX_CONTENT_LENGTH = 10000
+        self.MAX_LABEL_LENGTH = 200
+        self.MAX_USERNAME_LENGTH = 200
+        self.MAX_PASSWORD_LENGTH = 500
+        self.MAX_EMAIL_LENGTH = 320
+        self.MAX_URL_LENGTH = 2000
+    
+    def _validate_user_id(self, user_id: str) -> str:
+        """Validate and sanitize user ID."""
+        if not user_id or not isinstance(user_id, (str, int)):
+            raise ValueError("Invalid user ID")
+        return str(user_id).strip()
+    
+    def _validate_content(self, content: str, max_length: int = None) -> str:
+        """Validate and sanitize content."""
+        if not content or not isinstance(content, str):
+            raise ValueError("Invalid content")
+        
+        content = content.strip()
+        max_len = max_length or self.MAX_CONTENT_LENGTH
+        
+        if len(content) > max_len:
+            raise ValueError(f"Content too long (max {max_len} characters)")
+        
+        # Remove potential SQL injection patterns
+        content = re.sub(r'[;\'"\\]', '', content)
+        return content
+    
+    def _validate_label(self, label: str) -> str:
+        """Validate and sanitize label."""
+        return self._validate_content(label, self.MAX_LABEL_LENGTH)
+    
+    def _validate_username(self, username: str) -> str:
+        """Validate and sanitize username."""
+        return self._validate_content(username, self.MAX_USERNAME_LENGTH)
+    
+    def _validate_password(self, password: str) -> str:
+        """Validate and sanitize password."""
+        return self._validate_content(password, self.MAX_PASSWORD_LENGTH)
+    
+    def _validate_email(self, email: str) -> str:
+        """Validate and sanitize email."""
+        email = self._validate_content(email, self.MAX_EMAIL_LENGTH)
+        # Basic email validation
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+            raise ValueError("Invalid email format")
+        return email
+    
+    def _validate_url(self, url: str) -> str:
+        """Validate and sanitize URL."""
+        url = self._validate_content(url, self.MAX_URL_LENGTH)
+        # Basic URL validation
+        if not re.match(r'^https?://[^\s/$.?#].[^\s]*$', url):
+            raise ValueError("Invalid URL format")
+        return url
         
     async def initialize(self):
         """Initialize the database and create tables if they don't exist."""
@@ -86,38 +143,57 @@ class UserStorage:
     async def store_message(self, user_id: str, content: str, message_type: str = "text"):
         """Store a message from a user."""
         try:
+            user_id = self._validate_user_id(user_id)
+            content = self._validate_content(content)
+            message_type = self._validate_content(message_type, 50)
+            
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
                     "INSERT INTO user_messages (user_id, content, message_type) VALUES (?, ?, ?)",
-                    (str(user_id), content, message_type)
+                    (user_id, content, message_type)
                 )
                 await db.commit()
+        except ValueError as e:
+            logger.warning(f"Validation error storing message for user {user_id}: {e}")
         except Exception as e:
             logger.error(f"Error storing message for user {user_id}: {e}")
     
     async def store_password(self, user_id: str, label: str, password: str):
         """Store a password for a user with a specific label."""
         try:
+            user_id = self._validate_user_id(user_id)
+            label = self._validate_label(label)
+            password = self._validate_password(password)
+            
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
                     """INSERT OR REPLACE INTO user_passwords (user_id, label, password) 
                        VALUES (?, ?, ?)""",
-                    (str(user_id), label, password)
+                    (user_id, label, password)
                 )
                 await db.commit()
+        except ValueError as e:
+            logger.warning(f"Validation error storing password for user {user_id}: {e}")
         except Exception as e:
             logger.error(f"Error storing password for user {user_id}: {e}")
     
     async def store_credential(self, user_id: str, label: str, username: str, password: str):
         """Store username and password credentials for a user."""
         try:
+            user_id = self._validate_user_id(user_id)
+            label = self._validate_label(label)
+            username = self._validate_username(username)
+            password = self._validate_password(password)
+            
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
                     """INSERT OR REPLACE INTO user_credentials (user_id, label, username, password) 
                        VALUES (?, ?, ?, ?)""",
-                    (str(user_id), label, username, password)
+                    (user_id, label, username, password)
                 )
                 await db.commit()
+        except ValueError as e:
+            logger.warning(f"Validation error storing credentials for user {user_id}: {e}")
         except Exception as e:
             logger.error(f"Error storing credentials for user {user_id}: {e}")
     
@@ -197,12 +273,18 @@ class UserStorage:
     async def store_email(self, user_id: str, email: str, label: str = None):
         """Store an email address for a user."""
         try:
+            user_id = self._validate_user_id(user_id)
+            email = self._validate_email(email)
+            label = self._validate_label(label) if label else None
+            
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
                     "INSERT INTO user_emails (user_id, email, label) VALUES (?, ?, ?)",
-                    (str(user_id), email, label)
+                    (user_id, email, label)
                 )
                 await db.commit()
+        except ValueError as e:
+            logger.warning(f"Validation error storing email for user {user_id}: {e}")
         except Exception as e:
             logger.error(f"Error storing email for user {user_id}: {e}")
     
@@ -223,12 +305,18 @@ class UserStorage:
     async def store_link(self, user_id: str, url: str, link_type: str = None):
         """Store a link for a user."""
         try:
+            user_id = self._validate_user_id(user_id)
+            url = self._validate_url(url)
+            link_type = self._validate_content(link_type, 50) if link_type else None
+            
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
                     "INSERT INTO user_links (user_id, url, link_type) VALUES (?, ?, ?)",
-                    (str(user_id), url, link_type)
+                    (user_id, url, link_type)
                 )
                 await db.commit()
+        except ValueError as e:
+            logger.warning(f"Validation error storing link for user {user_id}: {e}")
         except Exception as e:
             logger.error(f"Error storing link for user {user_id}: {e}")
     
@@ -297,7 +385,7 @@ class UserStorage:
                 return categories
         except Exception as e:
             logger.error(f"Error getting categories for user {user_id}: {e}")
-            return {"passwords": 0, "notes": 0, "emails": 0, "links": 0, "total_messages": 0}
+            return {"passwords": 0, "credentials": 0, "notes": 0, "emails": 0, "links": 0, "total_messages": 0}
     
     async def clear_user_data(self, user_id: str):
         """Clear all data for a specific user."""

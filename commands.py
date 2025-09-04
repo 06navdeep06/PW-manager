@@ -278,6 +278,11 @@ class CommandHandler:
         """Automatically categorize and store different types of content."""
         if not content or not content.strip():
             return
+        
+        # Basic content validation
+        if len(content) > 10000:
+            logger.warning(f"Content too long from user {user_id}, truncating")
+            content = content[:10000]
             
         content_lower = content.lower()
         
@@ -298,23 +303,29 @@ class CommandHandler:
         ]
         
         for pattern in credential_patterns:
-            match = re.search(pattern, content, re.IGNORECASE)
-            if match:
-                groups = match.groups()
-                if len(groups) == 2:
-                    # Pattern 5: username/password without label
-                    username, password = groups
-                    label = f"Account_{username}"
-                    await self.storage.store_credential(user_id, label, username, password)
-                    logger.info(f"Stored credentials for user {user_id}: {label}")
-                    return
-                elif len(groups) == 3:
-                    # Patterns 2, 3, 4, 6: label, username, password
-                    label, username, password = groups
-                    if label and username and password:
-                        await self.storage.store_credential(user_id, label.strip(), username.strip(), password.strip())
-                        logger.info(f"Stored credentials for user {user_id}: {label}")
-                        return
+            try:
+                match = re.search(pattern, content, re.IGNORECASE)
+                if match:
+                    groups = match.groups()
+                    if len(groups) == 2:
+                        # Pattern 5: username/password without label
+                        username, password = groups
+                        if username and password and len(username) < 200 and len(password) < 500:
+                            label = f"Account_{username}"
+                            await self.storage.store_credential(user_id, label, username, password)
+                            logger.info(f"Stored credentials for user {user_id}: {label}")
+                            return
+                    elif len(groups) == 3:
+                        # Patterns 2, 3, 4, 6: label, username, password
+                        label, username, password = groups
+                        if (label and username and password and 
+                            len(label) < 200 and len(username) < 200 and len(password) < 500):
+                            await self.storage.store_credential(user_id, label.strip(), username.strip(), password.strip())
+                            logger.info(f"Stored credentials for user {user_id}: {label}")
+                            return
+            except Exception as e:
+                logger.error(f"Error processing credential pattern: {e}")
+                continue
         
         # Legacy password pattern: "password: <label> <password>"
         password_match = re.match(r'password:\s*([^:]+?)\s+(.+)', content, re.IGNORECASE)

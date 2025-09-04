@@ -9,11 +9,14 @@ import logging
 import os
 import asyncio
 import threading
+import time
+from collections import defaultdict
 from storage import UserStorage
 from ocr import ImageOCR
 from commands import CommandHandler
 from config import Config
 from keep_alive import start_keep_alive
+from monitoring import monitor, record_operation
 
 # Configure logging
 logging.basicConfig(
@@ -42,6 +45,20 @@ class PersonalDataBot(commands.Bot):
         self.ocr = ImageOCR(Config.TESSERACT_PATH)
         self.command_handler = CommandHandler(self.storage, self.ocr)
         
+        # Rate limiting
+        self.user_message_times = defaultdict(list)
+        self.max_messages_per_minute = 10
+        self.max_commands_per_minute = 5
+        
+        # Security measures
+        self.blocked_users = set()
+        self.suspicious_patterns = [
+            r'<@!?\d+>',  # User mentions
+            r'<#\d+>',    # Channel mentions
+            r'<@&\d+>',   # Role mentions
+            r'<a?:\w+:\d+>',  # Emojis
+        ]
+        
     async def on_ready(self):
         """Called when the bot is ready and connected to Discord."""
         logger.info(f'{self.user} has connected to Discord!')
@@ -62,8 +79,26 @@ class PersonalDataBot(commands.Bot):
         # Only process Direct Messages
         if not isinstance(message.channel, discord.DMChannel):
             return
+        
+        # Security checks
+        if message.author.id in self.blocked_users:
+            return
+            
+        # Rate limiting
+        if not await self._check_rate_limit(message.author.id, message.content.startswith('!')):
+            await message.reply("⚠️ Rate limit exceeded. Please slow down.")
+            return
+        
+        # Content sanitization
+        if await self._is_suspicious_content(message.content):
+            logger.warning(f"Suspicious content from {message.author.name}: {message.content[:100]}")
+            await message.reply("⚠️ Your message contains potentially harmful content and was blocked.")
+            return
             
         logger.info(f"DM from {message.author.name} ({message.author.id}): {message.content[:100]}...")
+        
+        # Record message processing
+        monitor.record_message()
         
         # Check for wake-up command first
         if message.content.lower().startswith('!wake') or message.content.lower().startswith('!hey'):
@@ -120,6 +155,7 @@ class PersonalDataBot(commands.Bot):
         # Check for commands
         if message.content.startswith('!'):
             try:
+                monitor.record_command()
                 response = await self.command_handler.handle_command(
                     user_id=message.author.id,
                     command=message.content
@@ -127,6 +163,7 @@ class PersonalDataBot(commands.Bot):
                 if response:
                     await message.reply(response)
             except Exception as e:
+                monitor.record_error("command_error", str(e))
                 logger.error(f"Error handling command: {e}")
                 await message.reply("Sorry, there was an error processing your command.")
         else:
@@ -238,6 +275,43 @@ class PersonalDataBot(commands.Bot):
         
         return response
     
+    async def _check_rate_limit(self, user_id: int, is_command: bool = False) -> bool:
+        """Check if user is within rate limits."""
+        current_time = time.time()
+        user_times = self.user_message_times[user_id]
+        
+        # Clean old entries (older than 1 minute)
+        user_times[:] = [t for t in user_times if current_time - t < 60]
+        
+        # Check limits
+        max_allowed = self.max_commands_per_minute if is_command else self.max_messages_per_minute
+        
+        if len(user_times) >= max_allowed:
+            return False
+        
+        # Add current message time
+        user_times.append(current_time)
+        return True
+    
+    async def _is_suspicious_content(self, content: str) -> bool:
+        """Check if content contains suspicious patterns."""
+        import re
+        
+        # Check for suspicious patterns
+        for pattern in self.suspicious_patterns:
+            if re.search(pattern, content):
+                return True
+        
+        # Check for excessive length
+        if len(content) > 2000:
+            return True
+        
+        # Check for potential spam patterns
+        if content.count('!') > 10:  # Too many commands
+            return True
+        
+        return False
+    
     async def keep_alive(self):
         """Keep the bot alive on Replit by pinging every 5 minutes."""
         while True:
@@ -255,6 +329,15 @@ def main():
     if not Config.validate():
         return
     
+    # Run setup validation
+    try:
+        from validate_setup import run_validation
+        if not run_validation():
+            logger.error("Setup validation failed. Please fix the issues and try again.")
+            return
+    except ImportError:
+        logger.warning("Setup validation script not found, skipping validation")
+    
     # Start keep-alive server for Replit
     start_keep_alive()
     
@@ -262,11 +345,14 @@ def main():
     bot = PersonalDataBot()
     
     try:
+        logger.info("Starting Discord bot...")
         bot.run(Config.DISCORD_BOT_TOKEN)
     except discord.LoginFailure:
         logger.error("Invalid Discord bot token!")
+        monitor.record_error("login_failure", "Invalid bot token")
     except Exception as e:
         logger.error(f"Error running bot: {e}")
+        monitor.record_error("bot_startup_error", str(e))
 
 if __name__ == "__main__":
     main()
