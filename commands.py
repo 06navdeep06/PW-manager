@@ -571,9 +571,12 @@ class CommandHandler:
                     # Skip common keywords
                     if candidate.lower() in password_indicators + username_indicators:
                         continue
-                    if not username and self._looks_like_username(candidate) and candidate.lower() != 'user':
+                    # Never process 'user' as username or password
+                    if candidate.lower() in ['user', 'username', 'password', 'pass', 'pwd', 'email', 'login', 'id', 'account']:
+                        continue
+                    if not username and self._looks_like_username(candidate):
                         username = candidate
-                    elif username and self._looks_like_password(candidate) and candidate.lower() != 'user':
+                    elif username and self._looks_like_password(candidate):
                         password = candidate
                         break
                 
@@ -604,8 +607,11 @@ class CommandHandler:
                         label = key.replace('password', '').replace('pass', '').replace('pwd', '').strip()
                         if not label:
                             label = 'Detected'
+                        # Never store blacklisted words
+                        if value.lower() in ['user', 'username', 'password', 'pass', 'pwd', 'email', 'login', 'id', 'account']:
+                            continue
                         # Only store if the value looks like an actual password
-                        if self._looks_like_password(value) or len(value) >= 8:
+                        if self._looks_like_password(value) and len(value) >= 8:
                             credentials.append({
                                 'type': 'password',
                                 'label': label.title(),
@@ -682,6 +688,11 @@ class CommandHandler:
     def _looks_like_username(self, word: str) -> bool:
         """Check if a word looks like a username."""
         if len(word) < 3 or len(word) > 50:
+            return False
+        
+        # Never consider these as usernames
+        blacklist = {'user', 'username', 'password', 'pass', 'pwd', 'email', 'login', 'account', 'id', 'name'}
+        if word.lower() in blacklist:
             return False
         
         # Email-like usernames
