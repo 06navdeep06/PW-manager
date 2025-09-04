@@ -283,23 +283,30 @@ class CommandHandler:
         if len(content) > 10000:
             logger.warning(f"Content too long from user {user_id}, truncating")
             content = content[:10000]
-            
+        
+        # Clean up content for better processing (especially important for OCR text)
+        content = self._clean_text_content(content)
         content_lower = content.lower()
         
         # Enhanced credential patterns - check for various username/password combinations
+        # These patterns are designed to handle OCR text which may have spacing issues
         credential_patterns = [
-            # Pattern 1: "username: user password: pass" or "user: user pass: pass"
-            r'(?:username|user|id|email|login):\s*([^\s]+)\s+(?:password|pass|pwd):\s*([^\s]+)',
-            # Pattern 2: "label - username: user password: pass"
-            r'([^:]+?)\s*[-–]\s*(?:username|user|id|email|login):\s*([^\s]+)\s+(?:password|pass|pwd):\s*([^\s]+)',
-            # Pattern 3: "label: username/password" or "label: user:pass"
-            r'([^:]+?):\s*(?:username|user|id|email|login):\s*([^\s/]+)[/\s]+(?:password|pass|pwd):\s*([^\s]+)',
-            # Pattern 4: "label: user pass" (simple format)
-            r'([^:]+?):\s*([^\s]+)\s+([^\s]+)',
-            # Pattern 5: "username/password" or "user:pass" (no label)
-            r'(?:username|user|id|email|login):\s*([^\s/]+)[/\s]+(?:password|pass|pwd):\s*([^\s]+)',
-            # Pattern 6: "label - user:pass" format
-            r'([^:]+?)\s*[-–]\s*([^\s]+):([^\s]+)',
+            # Pattern 1: "username: user password: pass" or "user: user pass: pass" (flexible spacing)
+            r'(?:username|user|id|email|login)\s*:\s*([^\s:]+)\s+(?:password|pass|pwd)\s*:\s*([^\s]+)',
+            # Pattern 2: "label - username: user password: pass" (flexible spacing and separators)
+            r'([^:\n]+?)\s*[-–—]\s*(?:username|user|id|email|login)\s*:\s*([^\s:]+)\s+(?:password|pass|pwd)\s*:\s*([^\s]+)',
+            # Pattern 3: "label: username user password pass" (colon format with flexible spacing)
+            r'([^:\n]+?)\s*:\s*(?:username|user|id|email|login)\s+([^\s]+)\s+(?:password|pass|pwd)\s+([^\s]+)',
+            # Pattern 4: "label user pass" (simple format, three words)
+            r'([a-zA-Z][a-zA-Z0-9\s]{2,15})\s+([^\s]{3,})\s+([^\s]{3,})',
+            # Pattern 5: "username user password pass" (no colon, flexible spacing)
+            r'(?:username|user|id|email|login)\s+([^\s]{3,})\s+(?:password|pass|pwd)\s+([^\s]{3,})',
+            # Pattern 6: "label - user:pass" or "label user:pass" format
+            r'([^:\n]+?)\s*[-–—]?\s*([^\s:]+)\s*:\s*([^\s]+)',
+            # Pattern 7: Line-based credentials (each on separate line)
+            r'([a-zA-Z][a-zA-Z0-9\s]+)\n\s*([^\s\n]+)\n\s*([^\s\n]+)',
+            # Pattern 8: Account/Service credentials with various formats
+            r'(?:account|service|site|app|login)\s*[-–—:]?\s*([^:\n]+?)\s*[-–—:]\s*([^\s]+)\s*[-–—:]\s*([^\s]+)',
         ]
         
         for pattern in credential_patterns:
@@ -337,42 +344,128 @@ class CommandHandler:
                 logger.info(f"Stored password for user {user_id} with label '{label}'")
             return
         
-        # Check for email addresses
-        emails = self.email_pattern.findall(content)
-        for email in emails:
-            if email and email.strip():
-                await self.storage.store_email(user_id, email.strip())
-                logger.info(f"Stored email for user {user_id}: {email}")
+        # Check for email addresses with enhanced patterns for OCR text
+        email_patterns = [
+            self.email_pattern,  # Original pattern
+            # OCR-friendly pattern that handles common OCR mistakes
+            re.compile(r'\b[A-Za-z0-9._%-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
+            # Pattern that handles spaces around @ and dots (common OCR errors)
+            re.compile(r'\b[A-Za-z0-9._%-]+\s*@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,}\b'),
+        ]
         
-        # Check for URLs
-        urls = self.url_pattern.findall(content)
-        for url in urls:
-            if url and url.strip():
-                # Determine link type
-                link_type = "general"
-                url_lower = url.lower()
-                if self.youtube_pattern.search(url):
-                    link_type = "youtube"
-                elif "github.com" in url_lower:
-                    link_type = "github"
-                elif "stackoverflow.com" in url_lower:
-                    link_type = "stackoverflow"
-                elif "youtube.com" in url_lower or "youtu.be" in url_lower:
-                    link_type = "youtube"
-                elif "reddit.com" in url_lower:
-                    link_type = "reddit"
-                elif "twitter.com" in url_lower or "x.com" in url_lower:
-                    link_type = "twitter"
+        emails_found = set()
+        for pattern in email_patterns:
+            emails = pattern.findall(content)
+            for email in emails:
+                # Clean up the email (remove spaces around @ and dots)
+                clean_email = re.sub(r'\s*@\s*', '@', email)
+                clean_email = re.sub(r'\s*\.\s*', '.', clean_email)
                 
-                await self.storage.store_link(user_id, url.strip(), link_type)
-                logger.info(f"Stored {link_type} link for user {user_id}: {url}")
+                if clean_email and clean_email.strip() and '@' in clean_email and '.' in clean_email:
+                    emails_found.add(clean_email.strip())
+        
+        for email in emails_found:
+            await self.storage.store_email(user_id, email)
+            logger.info(f"Stored email for user {user_id}: {email}")
+        
+        # Check for URLs with enhanced patterns for OCR text
+        url_patterns = [
+            self.url_pattern,  # Original pattern
+            # Pattern that handles spaces in URLs (common OCR error)
+            re.compile(r'http[s]?\s*:\s*//\s*(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F])|\s)+'),
+            # Pattern for URLs without http/https
+            re.compile(r'\b(?:www\.)?[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:/[^\s]*)?'),
+        ]
+        
+        urls_found = set()
+        for pattern in url_patterns:
+            urls = pattern.findall(content)
+            for url in urls:
+                # Clean up the URL (remove spaces)
+                clean_url = re.sub(r'\s+', '', url)
+                
+                # Add http:// if missing
+                if clean_url and not clean_url.startswith(('http://', 'https://')):
+                    clean_url = 'http://' + clean_url
+                
+                if clean_url and self.is_valid_url(clean_url):
+                    urls_found.add(clean_url)
+        
+        for url in urls_found:
+            # Determine link type
+            link_type = "general"
+            url_lower = url.lower()
+            if self.youtube_pattern.search(url):
+                link_type = "youtube"
+            elif "github.com" in url_lower:
+                link_type = "github"
+            elif "stackoverflow.com" in url_lower:
+                link_type = "stackoverflow"
+            elif "youtube.com" in url_lower or "youtu.be" in url_lower:
+                link_type = "youtube"
+            elif "reddit.com" in url_lower:
+                link_type = "reddit"
+            elif "twitter.com" in url_lower or "x.com" in url_lower:
+                link_type = "twitter"
+            
+            await self.storage.store_link(user_id, url, link_type)
+            logger.info(f"Stored {link_type} link for user {user_id}: {url}")
         
         # If it's not a command and contains text, store as a note
         if not content.startswith('!') and content.strip():
             # Don't store if it's just an email or URL (already stored above)
-            if not emails and not urls:
+            # Also check if content was already processed as credentials
+            content_has_structured_data = bool(emails_found or urls_found)
+            
+            # Only store as note if there's meaningful text beyond structured data
+            if not content_has_structured_data or len(content.strip()) > 50:
                 await self.storage.store_note(user_id, content.strip())
                 logger.info(f"Stored note for user {user_id}")
+    
+    def _clean_text_content(self, content: str) -> str:
+        """Clean and normalize text content, especially useful for OCR text."""
+        if not content:
+            return content
+        
+        # Remove excessive whitespace and normalize line breaks
+        lines = []
+        for line in content.split('\n'):
+            cleaned_line = ' '.join(line.split())  # Remove extra spaces
+            if cleaned_line:
+                lines.append(cleaned_line)
+        
+        content = '\n'.join(lines)
+        
+        # Common OCR corrections
+        replacements = {
+            # Common OCR character misreads
+            '0': 'O',  # zero to O in passwords/usernames
+            '1': 'I',  # one to I
+            '|': 'I',  # pipe to I
+            '5': 'S',  # five to S
+            # Normalize punctuation
+            '"': '"',  # smart quotes
+            '"': '"',
+            ''': "'",
+            ''': "'",
+            '–': '-',  # em dash to hyphen
+            '—': '-',
+        }
+        
+        # Apply replacements only in contexts where they make sense
+        # Be conservative to avoid corrupting actual data
+        words = content.split()
+        cleaned_words = []
+        
+        for word in words:
+            # Only apply OCR corrections to likely username/password fields
+            if any(keyword in content.lower() for keyword in ['username', 'password', 'user', 'pass', 'login', 'email']):
+                for old, new in replacements.items():
+                    if old in word and len(word) > 2:  # Only replace in longer words
+                        word = word.replace(old, new)
+            cleaned_words.append(word)
+        
+        return ' '.join(cleaned_words)
     
     def is_valid_url(self, url: str) -> bool:
         """Check if a string is a valid URL."""

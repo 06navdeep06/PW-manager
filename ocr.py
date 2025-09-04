@@ -71,24 +71,55 @@ class ImageOCR:
             if image.mode != 'RGB':
                 image = image.convert('RGB')
             
-            # Perform OCR with optimized settings
-            # Use different PSM modes for better accuracy
-            config = '--oem 3 --psm 6'  # OCR Engine Mode 3, Page Segmentation Mode 6
+            # Try multiple OCR configurations for better text extraction
+            configs = [
+                '--oem 3 --psm 6',  # Uniform block of text (default)
+                '--oem 3 --psm 3',  # Fully automatic page segmentation
+                '--oem 3 --psm 4',  # Single column of text
+                '--oem 3 --psm 7',  # Single text line
+                '--oem 3 --psm 8',  # Single word
+                '--oem 3 --psm 11', # Sparse text
+                '--oem 3 --psm 12', # Sparse text with OSD
+            ]
             
-            # Try with default config first
-            text = pytesseract.image_to_string(image, config=config)
+            best_text = ""
+            best_confidence = 0
             
-            # If no text found, try with different PSM mode
-            if not text.strip():
-                config = '--oem 3 --psm 3'  # Fully automatic page segmentation
-                text = pytesseract.image_to_string(image, config=config)
+            for config in configs:
+                try:
+                    # Extract text with current configuration
+                    text = pytesseract.image_to_string(image, config=config)
+                    
+                    if text and text.strip():
+                        # Try to get confidence score if possible
+                        try:
+                            data = pytesseract.image_to_data(image, config=config, output_type=pytesseract.Output.DICT)
+                            confidences = [int(conf) for conf in data['conf'] if int(conf) > 0]
+                            avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+                            
+                            # Choose text with highest confidence and reasonable length
+                            if (avg_confidence > best_confidence and len(text.strip()) > len(best_text.strip())) or (not best_text and text.strip()):
+                                best_text = text
+                                best_confidence = avg_confidence
+                        except:
+                            # If confidence calculation fails, just use text length as metric
+                            if len(text.strip()) > len(best_text.strip()):
+                                best_text = text
+                                
+                except Exception as e:
+                    logger.debug(f"OCR config {config} failed: {e}")
+                    continue
             
-            # If still no text, try with different PSM mode for single text line
-            if not text.strip():
-                config = '--oem 3 --psm 7'  # Single text line
-                text = pytesseract.image_to_string(image, config=config)
-            
-            return text
+            # Clean up the extracted text
+            if best_text:
+                # Remove excessive whitespace and clean up formatting
+                lines = [line.strip() for line in best_text.split('\n') if line.strip()]
+                best_text = '\n'.join(lines)
+                
+                # Remove common OCR artifacts
+                best_text = best_text.replace('|', 'I').replace('0', 'O').replace('5', 'S')
+                
+            return best_text
             
         except pytesseract.TesseractNotFoundError:
             logger.error("Tesseract OCR not found. Please install Tesseract OCR.")

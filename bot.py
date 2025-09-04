@@ -132,12 +132,21 @@ class PersonalDataBot(commands.Bot):
                         extracted_text = await self.ocr.extract_text(image_data)
                         
                         if extracted_text:
+                            # Store the original OCR text as a message
                             await self.storage.store_message(
                                 user_id=message.author.id,
                                 content=f"[IMAGE OCR] {extracted_text}",
                                 message_type="image_ocr"
                             )
-                            logger.info(f"OCR extracted text: {extracted_text[:100]}...")
+                            
+                            # Process the extracted text through auto-categorization
+                            # This will automatically detect and store passwords, emails, links, etc.
+                            await self.command_handler._auto_categorize_and_store(
+                                user_id=message.author.id,
+                                content=extracted_text
+                            )
+                            
+                            logger.info(f"OCR extracted and categorized text: {extracted_text[:100]}...")
                         else:
                             await self.storage.store_message(
                                 user_id=message.author.id,
