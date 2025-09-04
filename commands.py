@@ -544,7 +544,10 @@ class CommandHandler:
                 # Look for password in next few words
                 for j in range(i+1, min(i+5, len(words))):
                     next_word = words[j]
-                    if self._looks_like_password(next_word) or len(next_word) >= 6:
+                    # Skip if the next word is just another indicator
+                    if next_word.lower() in password_indicators + username_indicators:
+                        continue
+                    if self._looks_like_password(next_word) and len(next_word) >= 8:
                         # Try to find a label (look backwards)
                         label = self._find_label_before(words, i)
                         credentials.append({
@@ -561,13 +564,17 @@ class CommandHandler:
                 password = None
                 
                 for j in range(i+1, min(i+6, len(words))):
-                    if not username and self._looks_like_username(words[j]):
-                        username = words[j]
-                    elif username and self._looks_like_password(words[j]):
-                        password = words[j]
+                    candidate = words[j]
+                    # Skip common keywords
+                    if candidate.lower() in password_indicators + username_indicators:
+                        continue
+                    if not username and self._looks_like_username(candidate):
+                        username = candidate
+                    elif username and self._looks_like_password(candidate):
+                        password = candidate
                         break
                 
-                if username and password:
+                if username and password and username != password:
                     label = self._find_label_before(words, i) or username
                     credentials.append({
                         'type': 'credential',
@@ -602,7 +609,7 @@ class CommandHandler:
         
         # Heuristic 4: Pattern-free detection - just look for password-like strings with context
         for i, word in enumerate(words):
-            if self._looks_like_password(word):
+            if self._looks_like_password(word) and len(word) >= 8:
                 # Check if there's context around it
                 context_words = []
                 for j in range(max(0, i-3), min(len(words), i+4)):
@@ -612,11 +619,13 @@ class CommandHandler:
                 # If there's password-related context, store it
                 if any(indicator in ' '.join(context_words) for indicator in password_indicators + username_indicators):
                     label = self._find_label_before(words, i) or 'Detected'
-                    credentials.append({
-                        'type': 'password',
-                        'label': label,
-                        'password': word
-                    })
+                    # Don't store if it's just the word "user" or similar
+                    if word.lower() not in ['user', 'username', 'password', 'pass', 'pwd', 'email', 'login']:
+                        credentials.append({
+                            'type': 'password',
+                            'label': label,
+                            'password': word
+                        })
         
         # Remove duplicates based on password value
         seen_passwords = set()

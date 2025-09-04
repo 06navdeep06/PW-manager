@@ -217,6 +217,8 @@ class PersonalDataBot(commands.Bot):
                 content = content[11:].strip()  # Remove prefix
             elif content.startswith('[IMAGE ERROR]'):
                 continue  # Skip error messages
+            elif content.startswith('!'):
+                continue  # Skip commands
             
             # Auto-categorize the content
             await self.command_handler._auto_categorize_and_store(user_id, content)
