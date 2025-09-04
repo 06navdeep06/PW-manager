@@ -1,0 +1,20 @@
+# Discord Bot Dependencies
+discord.py>=2.3.2
+aiosqlite>=0.19.0
+
+# OCR Dependencies
+pytesseract>=0.3.10
+Pillow>=10.0.0
+
+# Additional utilities
+aiofiles>=23.2.1
+
+# Keep-alive server for Replit
+Flask>=2.3.0
+
+# Optional: For better image processing
+opencv-python>=4.8.0.74
+
+# Development dependencies (optional)
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
