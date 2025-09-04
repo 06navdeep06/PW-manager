@@ -59,6 +59,10 @@ class CommandHandler:
                 return await self._handle_get_emails(user_id)
             elif command.startswith('!get links'):
                 return await self._handle_get_links(user_id)
+            elif command.startswith('!store') or command.startswith('!save'):
+                return await self._handle_quick_store(user_id, command)
+            elif command.startswith('!add'):
+                return await self._handle_add(user_id, command)
             elif command.startswith('!list'):
                 return await self._handle_list(user_id)
             elif command.startswith('!clear'):
@@ -198,30 +202,47 @@ class CommandHandler:
     
     async def _handle_help(self) -> str:
         """Handle !help command."""
-        return """**Available Commands:**
+        return """**🤖 Personal Data Bot - Help**
 
-`!wake` or `!hey` - Wake up the bot and get conversation summary
+**📥 QUICK STORAGE COMMANDS:**
+`!store <service> <username> <password>` - Store credentials
+`!store <service> <password>` - Store password only
+`!save <service> <username> <password>` - Same as !store
+`!add <anything>` - Smart auto-detection and storage
+
+**📤 RETRIEVAL COMMANDS:**
 `!get password <label>` - Get a saved password
-`!get credentials` - Get all your saved credentials (username/password)
+`!get credentials` - Get all your saved credentials
 `!get credential <label>` - Get specific credentials by label
 `!get notes` - Get all your notes
 `!get emails` - Get all your saved emails
 `!get links` - Get all your saved links
+
+**🔍 SEARCH & MANAGE:**
+`!search <term>` - Search through your stored data
+`!recent [number]` - Show recent messages (default: 5)
 `!list` - List all your stored data categories
 `!clear` - Clear all your data
-`!recent [number]` - Show recent messages (default: 5)
-`!search <term>` - Search through your stored data
-`!help` - Show this help message
+`!wake` or `!hey` - Get conversation summary
 
-**Auto-detection:**
-- **Credentials**: `username: user password: pass` or `Gmail - username: user password: pass`
-- **Passwords**: `password: <label> <password>`
-- **Notes**: Just send any text
+**🎯 CONVENIENT INPUT FORMATS:**
+• **Simple**: `gmail john@email.com mypass123`
+• **With slash**: `Netflix: user123/pass456`
+• **With keywords**: `user john password abc123 for Gmail`
+• **Line format**: `Gmail\nuser: john\npass: abc123`
+• **Quick password**: `password gmail: mypass123`
+• **Two words**: `netflix mypassword123`
+
+**🔄 AUTO-DETECTION:**
 - **Emails**: Any email address will be saved
 - **Links**: Any URL will be saved (YouTube, GitHub, etc.)
-- **Images**: OCR text will be extracted and saved
+- **Images**: OCR text will be extracted and categorized
+- **Notes**: Any other text becomes a note
 
-**💡 Tip:** Use `!wake` to get a complete summary of our conversation!"""
+**💡 Pro Tips:**
+• Just send any message - I'll categorize it automatically!
+• Use `!wake` to get a complete summary of our conversation
+• Use quotes for services with spaces: `!store "My Bank" user pass`"""
     
     async def _handle_recent(self, user_id: str, command: str) -> str:
         """Handle !recent command."""
@@ -274,6 +295,91 @@ class CommandHandler:
         
         return response
     
+    async def _handle_quick_store(self, user_id: str, command: str) -> str:
+        """Handle !store and !save commands for quick credential storage."""
+        # Remove the command prefix and get the content
+        content = command[6:].strip() if command.startswith('!store') else command[5:].strip()
+        
+        if not content:
+            return """**Quick Store Usage:**
+`!store service username password` - Store credentials
+`!store service password` - Store password only
+`!save Gmail john@email.com mypass123` - Same as store
+`!store Netflix mypassword` - Store password for Netflix
+
+**Examples:**
+• `!store Gmail john@email.com mypass123`
+• `!save Netflix user123 pass456`
+• `!store "My Bank" username123 secretpass`
+• `!store Reddit mypassword123`"""
+        
+        # Try to parse the content using our convenient detection
+        credentials = self._detect_convenient_formats(content)
+        
+        if not credentials:
+            # Try a simple split approach
+            parts = content.split()
+            if len(parts) == 3:
+                # service username password
+                service, username, password = parts
+                credentials = [{
+                    'type': 'credential',
+                    'label': service.strip('"\'').title(),
+                    'username': username,
+                    'password': password
+                }]
+            elif len(parts) == 2:
+                # service password
+                service, password = parts
+                credentials = [{
+                    'type': 'password',
+                    'label': service.strip('"\'').title(),
+                    'password': password
+                }]
+        
+        if not credentials:
+            return "❌ Could not parse your input. Use format: `!store service username password` or `!store service password`"
+        
+        # Store the detected credentials
+        stored_count = 0
+        for cred in credentials:
+            try:
+                if cred['type'] == 'credential':
+                    await self.storage.store_credential(user_id, cred['label'], cred['username'], cred['password'])
+                    stored_count += 1
+                elif cred['type'] == 'password':
+                    await self.storage.store_password(user_id, cred['label'], cred['password'])
+                    stored_count += 1
+            except Exception as e:
+                logger.error(f"Error storing quick credential: {e}")
+                continue
+        
+        if stored_count > 0:
+            return f"✅ Successfully stored {stored_count} credential(s)!"
+        else:
+            return "❌ Failed to store credentials. Please check the format and try again."
+    
+    async def _handle_add(self, user_id: str, command: str) -> str:
+        """Handle !add command for flexible data addition."""
+        content = command[4:].strip()  # Remove "!add"
+        
+        if not content:
+            return """**Add Command Usage:**
+`!add <anything>` - Automatically categorize and store
+• Passwords, credentials, emails, links, and notes
+• Uses smart detection to categorize your data
+• Same as just sending the message without !add
+
+**Examples:**
+• `!add Gmail john@email.com mypass123`
+• `!add My important note about something`
+• `!add https://github.com/myrepo`
+• `!add user: john password: abc123 for Netflix`"""
+        
+        # Process the content using auto-categorization
+        await self._auto_categorize_and_store(user_id, content)
+        return "✅ Data processed and stored!"
+    
     async def _auto_categorize_and_store(self, user_id: str, content: str):
         """Automatically categorize and store different types of content."""
         if not content or not content.strip():
@@ -301,6 +407,20 @@ class CommandHandler:
                     logger.info(f"Auto-detected and stored password for user {user_id}: {cred['label']}")
             except Exception as e:
                 logger.error(f"Error storing auto-detected credential: {e}")
+                continue
+        
+        # Enhanced convenient detection patterns
+        convenient_credentials = self._detect_convenient_formats(content)
+        for cred in convenient_credentials:
+            try:
+                if cred['type'] == 'credential':
+                    await self.storage.store_credential(user_id, cred['label'], cred['username'], cred['password'])
+                    logger.info(f"Stored convenient format credentials for user {user_id}: {cred['label']}")
+                elif cred['type'] == 'password':
+                    await self.storage.store_password(user_id, cred['label'], cred['password'])
+                    logger.info(f"Stored convenient format password for user {user_id}: {cred['label']}")
+            except Exception as e:
+                logger.error(f"Error storing convenient format credential: {e}")
                 continue
         
         # Check for email addresses with enhanced patterns for OCR text
@@ -534,7 +654,7 @@ class CommandHandler:
         
         return False
     
-    def _find_label_before(self, words: list, index: int) -> str:
+    def _find_label_before(self, words: list, index: int) -> Optional[str]:
         """Find a suitable label before the given index."""
         # Look backwards for a potential label
         for i in range(index-1, max(0, index-4), -1):
@@ -548,6 +668,109 @@ class CommandHandler:
                 return label.title()
         
         return None
+
+    def _detect_convenient_formats(self, content: str) -> list:
+        """
+        Detect convenient input formats for ID/password combinations.
+        Supports various natural input styles.
+        """
+        credentials = []
+        lines = content.split('\n')
+        content_lower = content.lower()
+        
+        # Pattern 1: Simple "service user pass" format
+        # Examples: "gmail john@email.com mypassword123", "netflix user123 pass456"
+        simple_pattern = re.compile(r'(\w+)\s+([^\s]+)\s+([^\s]+)', re.IGNORECASE)
+        for match in simple_pattern.finditer(content):
+            service, user, password = match.groups()
+            if len(password) >= 6 and len(user) >= 3:  # Basic validation
+                credentials.append({
+                    'type': 'credential',
+                    'label': service.title(),
+                    'username': user,
+                    'password': password
+                })
+        
+        # Pattern 2: "service: user/pass" format
+        # Examples: "Netflix: user123/pass456", "Gmail: john@email.com/mypass"
+        colon_slash_pattern = re.compile(r'([^:\n]+):\s*([^/\s]+)/([^\s\n]+)', re.IGNORECASE)
+        for match in colon_slash_pattern.finditer(content):
+            service, user, password = match.groups()
+            credentials.append({
+                'type': 'credential',
+                'label': service.strip().title(),
+                'username': user.strip(),
+                'password': password.strip()
+            })
+        
+        # Pattern 3: Line-by-line format
+        # Examples: "Gmail\nuser: john@email.com\npass: mypass123"
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line or len(lines) <= i + 2:
+                continue
+                
+            # Check if this might be a service name
+            if len(line.split()) <= 2 and len(line) < 50:
+                next_line = lines[i + 1].strip() if i + 1 < len(lines) else ""
+                third_line = lines[i + 2].strip() if i + 2 < len(lines) else ""
+                
+                user_match = re.match(r'(?:user|username|id|email):\s*(.+)', next_line, re.IGNORECASE)
+                pass_match = re.match(r'(?:pass|password|pwd):\s*(.+)', third_line, re.IGNORECASE)
+                
+                if user_match and pass_match:
+                    credentials.append({
+                        'type': 'credential',
+                        'label': line.title(),
+                        'username': user_match.group(1).strip(),
+                        'password': pass_match.group(1).strip()
+                    })
+        
+        # Pattern 4: Space-separated with keywords
+        # Examples: "user john password mypass123 for Gmail"
+        keyword_pattern = re.compile(r'(?:user|username|id)\s+([^\s]+)\s+(?:pass|password|pwd)\s+([^\s]+)(?:\s+for\s+([^\n]+))?', re.IGNORECASE)
+        for match in keyword_pattern.finditer(content):
+            user, password, service = match.groups()
+            label = service.strip().title() if service else 'Account'
+            credentials.append({
+                'type': 'credential',
+                'label': label,
+                'username': user,
+                'password': password
+            })
+        
+        # Pattern 5: Quick password format
+        # Examples: "pass for gmail: mypassword123", "password netflix: abc123"
+        quick_pass_pattern = re.compile(r'(?:pass|password|pwd)\s+(?:for\s+)?([^:\n]+):\s*([^\s\n]+)', re.IGNORECASE)
+        for match in quick_pass_pattern.finditer(content):
+            service, password = match.groups()
+            credentials.append({
+                'type': 'password',
+                'label': service.strip().title(),
+                'password': password.strip()
+            })
+        
+        # Pattern 6: Just service and password
+        # Examples: "gmail mypassword123", "netflix abc123def" 
+        if len(content.split()) == 2:
+            parts = content.split()
+            if len(parts[1]) >= 6 and not parts[0].lower() in ['user', 'username', 'password', 'pass', 'pwd', 'email']:  # Reasonable password length and not a keyword
+                credentials.append({
+                    'type': 'password',
+                    'label': parts[0].title(),
+                    'password': parts[1]
+                })
+        
+        # Remove duplicates
+        seen = set()
+        unique_creds = []
+        for cred in credentials:
+            key = (cred['type'], cred['label'], cred.get('username', ''), cred['password'])
+            if key not in seen:
+                seen.add(key)
+                unique_creds.append(cred)
+        
+        return unique_creds
 
     def _clean_text_content(self, content: str) -> str:
         """Clean and normalize text content, especially useful for OCR text."""

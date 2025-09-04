@@ -29,13 +29,13 @@ class UserStorage:
             raise ValueError("Invalid user ID")
         return str(user_id).strip()
     
-    def _validate_content(self, content: str, max_length: int = None) -> str:
+    def _validate_content(self, content: str, max_length: Optional[int] = None) -> str:
         """Validate and sanitize content."""
         if not content or not isinstance(content, str):
             raise ValueError("Invalid content")
         
         content = content.strip()
-        max_len = max_length or self.MAX_CONTENT_LENGTH
+        max_len = max_length if max_length is not None else self.MAX_CONTENT_LENGTH
         
         if len(content) > max_len:
             raise ValueError(f"Content too long (max {max_len} characters)")
@@ -247,12 +247,17 @@ class UserStorage:
     async def store_note(self, user_id: str, note: str):
         """Store a note for a user."""
         try:
+            user_id = self._validate_user_id(user_id)
+            note = self._validate_content(note)
+            
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
                     "INSERT INTO user_notes (user_id, note) VALUES (?, ?)",
-                    (str(user_id), note)
+                    (user_id, note)
                 )
                 await db.commit()
+        except ValueError as e:
+            logger.warning(f"Validation error storing note for user {user_id}: {e}")
         except Exception as e:
             logger.error(f"Error storing note for user {user_id}: {e}")
     
@@ -270,12 +275,12 @@ class UserStorage:
             logger.error(f"Error retrieving notes for user {user_id}: {e}")
             return []
     
-    async def store_email(self, user_id: str, email: str, label: str = None):
+    async def store_email(self, user_id: str, email: str, label: Optional[str] = None):
         """Store an email address for a user."""
         try:
             user_id = self._validate_user_id(user_id)
             email = self._validate_email(email)
-            label = self._validate_label(label) if label else None
+            label = self._validate_label(label) if label is not None else None
             
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
@@ -302,12 +307,12 @@ class UserStorage:
             logger.error(f"Error retrieving emails for user {user_id}: {e}")
             return []
     
-    async def store_link(self, user_id: str, url: str, link_type: str = None):
+    async def store_link(self, user_id: str, url: str, link_type: Optional[str] = None):
         """Store a link for a user."""
         try:
             user_id = self._validate_user_id(user_id)
             url = self._validate_url(url)
-            link_type = self._validate_content(link_type, 50) if link_type else None
+            link_type = self._validate_content(link_type, 50) if link_type is not None else None
             
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
