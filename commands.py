@@ -65,6 +65,8 @@ class CommandHandler:
                 return await self._handle_add(user_id, command)
             elif command.startswith('!list'):
                 return await self._handle_list(user_id)
+            elif command.startswith('!clear duplicates'):
+                return await self._handle_clear_duplicates(user_id)
             elif command.startswith('!clear'):
                 return await self._handle_clear(user_id)
             elif command.startswith('!help'):
@@ -74,9 +76,13 @@ class CommandHandler:
             elif command.startswith('!search'):
                 return await self._handle_search(user_id, command)
             else:
-                # Auto-categorize and store the message
-                await self._auto_categorize_and_store(user_id, command)
-                return None
+                # Don't auto-categorize commands that start with ! but aren't recognized
+                if command.startswith('!'):
+                    return "❌ Unknown command. Type `!help` to see all available commands."
+                else:
+                    # Auto-categorize and store non-command messages
+                    await self._auto_categorize_and_store(user_id, command)
+                    return None
                 
         except Exception as e:
             logger.error(f"Error handling command '{command}': {e}")
@@ -199,6 +205,15 @@ class CommandHandler:
         """Handle !clear command."""
         await self.storage.clear_user_data(user_id)
         return "✅ All your data has been cleared."
+    
+    async def _handle_clear_duplicates(self, user_id: str) -> str:
+        """Handle !clear duplicates command."""
+        try:
+            await self.storage.clear_duplicates(user_id)
+            return "✅ Duplicate entries have been removed from your data."
+        except Exception as e:
+            logger.error(f"Error clearing duplicates for user {user_id}: {e}")
+            return "❌ Error clearing duplicates. Please try again."
     
     async def _handle_help(self) -> str:
         """Handle !help command."""
@@ -409,19 +424,20 @@ class CommandHandler:
                 logger.error(f"Error storing auto-detected credential: {e}")
                 continue
         
-        # Enhanced convenient detection patterns
-        convenient_credentials = self._detect_convenient_formats(content)
-        for cred in convenient_credentials:
-            try:
-                if cred['type'] == 'credential':
-                    await self.storage.store_credential(user_id, cred['label'], cred['username'], cred['password'])
-                    logger.info(f"Stored convenient format credentials for user {user_id}: {cred['label']}")
-                elif cred['type'] == 'password':
-                    await self.storage.store_password(user_id, cred['label'], cred['password'])
-                    logger.info(f"Stored convenient format password for user {user_id}: {cred['label']}")
-            except Exception as e:
-                logger.error(f"Error storing convenient format credential: {e}")
-                continue
+        # Enhanced convenient detection patterns (only if no credentials were found above)
+        if not potential_credentials:
+            convenient_credentials = self._detect_convenient_formats(content)
+            for cred in convenient_credentials:
+                try:
+                    if cred['type'] == 'credential':
+                        await self.storage.store_credential(user_id, cred['label'], cred['username'], cred['password'])
+                        logger.info(f"Stored convenient format credentials for user {user_id}: {cred['label']}")
+                    elif cred['type'] == 'password':
+                        await self.storage.store_password(user_id, cred['label'], cred['password'])
+                        logger.info(f"Stored convenient format password for user {user_id}: {cred['label']}")
+                except Exception as e:
+                    logger.error(f"Error storing convenient format credential: {e}")
+                    continue
         
         # Check for email addresses with enhanced patterns for OCR text
         email_patterns = [
@@ -494,7 +510,7 @@ class CommandHandler:
         if not content.startswith('!') and content.strip():
             # Don't store if it's just an email or URL (already stored above)
             # Also check if content was already processed as credentials
-            content_has_structured_data = bool(emails_found or urls_found)
+            content_has_structured_data = bool(emails_found or urls_found or potential_credentials)
             
             # Only store as note if there's meaningful text beyond structured data
             if not content_has_structured_data or len(content.strip()) > 50:
@@ -618,6 +634,11 @@ class CommandHandler:
         if len(word) < 6:
             return False
         
+        # Skip common false positives
+        false_positives = ['user', 'username', 'password', 'pass', 'gmail', 'email', 'login', 'account']
+        if word.lower() in false_positives:
+            return False
+        
         # Basic password characteristics
         has_upper = any(c.isupper() for c in word)
         has_lower = any(c.islower() for c in word)
@@ -635,7 +656,7 @@ class CommandHandler:
         # Look for common password patterns
         common_patterns = ['123', 'abc', 'qwerty', 'password', 'admin']
         if any(pattern in word.lower() for pattern in common_patterns):
-            return len(word) >= 6
+            return len(word) >= 8  # Increase minimum length for common patterns
         
         return False
     
@@ -683,7 +704,11 @@ class CommandHandler:
         simple_pattern = re.compile(r'(\w+)\s+([^\s]+)\s+([^\s]+)', re.IGNORECASE)
         for match in simple_pattern.finditer(content):
             service, user, password = match.groups()
-            if len(password) >= 6 and len(user) >= 3:  # Basic validation
+            # Better validation to avoid false positives
+            if (len(password) >= 6 and len(user) >= 3 and 
+                service.lower() not in ['user', 'username', 'password', 'pass', 'pwd'] and
+                user.lower() not in ['user', 'username', 'password', 'pass', 'pwd'] and
+                password.lower() not in ['user', 'username', 'password', 'pass', 'pwd']):
                 credentials.append({
                     'type': 'credential',
                     'label': service.title(),

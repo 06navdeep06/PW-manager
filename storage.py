@@ -165,13 +165,21 @@ class UserStorage:
             label = self._validate_label(label)
             password = self._validate_password(password)
             
+            # Check if exact same password already exists
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(
-                    """INSERT OR REPLACE INTO user_passwords (user_id, label, password) 
-                       VALUES (?, ?, ?)""",
+                cursor = await db.execute(
+                    "SELECT id FROM user_passwords WHERE user_id = ? AND label = ? AND password = ?",
                     (user_id, label, password)
                 )
-                await db.commit()
+                existing = await cursor.fetchone()
+                
+                if not existing:
+                    await db.execute(
+                        """INSERT OR REPLACE INTO user_passwords (user_id, label, password) 
+                           VALUES (?, ?, ?)""",
+                        (user_id, label, password)
+                    )
+                    await db.commit()
         except ValueError as e:
             logger.warning(f"Validation error storing password for user {user_id}: {e}")
         except Exception as e:
@@ -185,13 +193,21 @@ class UserStorage:
             username = self._validate_username(username)
             password = self._validate_password(password)
             
+            # Check if exact same credential already exists
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(
-                    """INSERT OR REPLACE INTO user_credentials (user_id, label, username, password) 
-                       VALUES (?, ?, ?, ?)""",
+                cursor = await db.execute(
+                    "SELECT id FROM user_credentials WHERE user_id = ? AND label = ? AND username = ? AND password = ?",
                     (user_id, label, username, password)
                 )
-                await db.commit()
+                existing = await cursor.fetchone()
+                
+                if not existing:
+                    await db.execute(
+                        """INSERT OR REPLACE INTO user_credentials (user_id, label, username, password) 
+                           VALUES (?, ?, ?, ?)""",
+                        (user_id, label, username, password)
+                    )
+                    await db.commit()
         except ValueError as e:
             logger.warning(f"Validation error storing credentials for user {user_id}: {e}")
         except Exception as e:
@@ -428,3 +444,52 @@ class UserStorage:
         except Exception as e:
             logger.error(f"Error getting recent messages for user {user_id}: {e}")
             return []
+    
+    async def clear_duplicates(self, user_id: str):
+        """Remove duplicate entries for a user."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # Remove duplicate credentials (keep latest)
+                await db.execute("""
+                    DELETE FROM user_credentials 
+                    WHERE user_id = ? AND id NOT IN (
+                        SELECT MAX(id) FROM user_credentials 
+                        WHERE user_id = ? 
+                        GROUP BY label, username, password
+                    )
+                """, (str(user_id), str(user_id)))
+                
+                # Remove duplicate passwords (keep latest)
+                await db.execute("""
+                    DELETE FROM user_passwords 
+                    WHERE user_id = ? AND id NOT IN (
+                        SELECT MAX(id) FROM user_passwords 
+                        WHERE user_id = ? 
+                        GROUP BY label, password
+                    )
+                """, (str(user_id), str(user_id)))
+                
+                # Remove duplicate emails (keep latest)
+                await db.execute("""
+                    DELETE FROM user_emails 
+                    WHERE user_id = ? AND id NOT IN (
+                        SELECT MAX(id) FROM user_emails 
+                        WHERE user_id = ? 
+                        GROUP BY email
+                    )
+                """, (str(user_id), str(user_id)))
+                
+                # Remove duplicate links (keep latest)
+                await db.execute("""
+                    DELETE FROM user_links 
+                    WHERE user_id = ? AND id NOT IN (
+                        SELECT MAX(id) FROM user_links 
+                        WHERE user_id = ? 
+                        GROUP BY url
+                    )
+                """, (str(user_id), str(user_id)))
+                
+                await db.commit()
+                logger.info(f"Cleared duplicates for user {user_id}")
+        except Exception as e:
+            logger.error(f"Error clearing duplicates for user {user_id}: {e}")
