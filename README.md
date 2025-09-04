@@ -1,4 +1,4 @@
-# Discord Personal Data Bot
+#  PW STORAGE AGENT
 
 A Discord bot that stores and manages personal data through Direct Messages (DMs). The bot automatically categorizes and stores text, passwords, emails, links, and extracts text from images using OCR.
 
