@@ -547,6 +547,9 @@ class CommandHandler:
                     # Skip if the next word is just another indicator
                     if next_word.lower() in password_indicators + username_indicators:
                         continue
+                    # Explicit check to never store common keywords as passwords
+                    if next_word.lower() in ['user', 'username', 'password', 'pass', 'pwd', 'email', 'login', 'id', 'account']:
+                        continue
                     if self._looks_like_password(next_word) and len(next_word) >= 8:
                         # Try to find a label (look backwards)
                         label = self._find_label_before(words, i)
@@ -568,9 +571,9 @@ class CommandHandler:
                     # Skip common keywords
                     if candidate.lower() in password_indicators + username_indicators:
                         continue
-                    if not username and self._looks_like_username(candidate):
+                    if not username and self._looks_like_username(candidate) and candidate.lower() != 'user':
                         username = candidate
-                    elif username and self._looks_like_password(candidate):
+                    elif username and self._looks_like_password(candidate) and candidate.lower() != 'user':
                         password = candidate
                         break
                 
@@ -597,15 +600,17 @@ class CommandHandler:
                     value = parts[1].strip()
                     
                     # Check if key suggests this is a password
-                    if any(indicator in key for indicator in password_indicators) and value:
+                    if any(indicator in key for indicator in password_indicators) and value and value.lower() not in ['user', 'username', 'password', 'pass', 'pwd']:
                         label = key.replace('password', '').replace('pass', '').replace('pwd', '').strip()
                         if not label:
                             label = 'Detected'
-                        credentials.append({
-                            'type': 'password',
-                            'label': label.title(),
-                            'password': value
-                        })
+                        # Only store if the value looks like an actual password
+                        if self._looks_like_password(value) or len(value) >= 8:
+                            credentials.append({
+                                'type': 'password',
+                                'label': label.title(),
+                                'password': value
+                            })
         
         # Heuristic 4: Pattern-free detection - just look for password-like strings with context
         for i, word in enumerate(words):
@@ -640,12 +645,17 @@ class CommandHandler:
     
     def _looks_like_password(self, word: str) -> bool:
         """Check if a word looks like a password."""
-        if len(word) < 6:
+        if len(word) < 8:  # Increase minimum length
             return False
         
-        # Skip common false positives
-        false_positives = ['user', 'username', 'password', 'pass', 'gmail', 'email', 'login', 'account']
+        # Skip common false positives - be very aggressive here
+        false_positives = ['user', 'username', 'password', 'pass', 'pwd', 'gmail', 'email', 'login', 'account', 'id', 'name', 'label']
         if word.lower() in false_positives:
+            return False
+        
+        # Don't consider anything that starts with common prefixes
+        false_prefixes = ['user', 'email', 'login', 'account']
+        if any(word.lower().startswith(prefix) for prefix in false_prefixes):
             return False
         
         # Basic password characteristics
@@ -654,18 +664,18 @@ class CommandHandler:
         has_digit = any(c.isdigit() for c in word)
         has_special = any(c in '!@#$%^&*()_+-=[]{}|;:,.<>?' for c in word)
         
+        # Require at least 3 character types for passwords
+        char_types = sum([has_upper, has_lower, has_digit, has_special])
+        if char_types < 2:
+            return False
+        
         # Strong password indicators
-        if len(word) >= 8 and sum([has_upper, has_lower, has_digit, has_special]) >= 3:
+        if len(word) >= 8 and char_types >= 3:
             return True
         
         # Medium password indicators
-        if len(word) >= 10 and sum([has_upper, has_lower, has_digit]) >= 2:
+        if len(word) >= 12 and char_types >= 2:
             return True
-        
-        # Look for common password patterns
-        common_patterns = ['123', 'abc', 'qwerty', 'password', 'admin']
-        if any(pattern in word.lower() for pattern in common_patterns):
-            return len(word) >= 8  # Increase minimum length for common patterns
         
         return False
     
